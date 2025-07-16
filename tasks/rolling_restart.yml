@@ -117,10 +117,6 @@
   run_once: true
   when: inventory_hostname in groups[rke2_agents_group_name]
 
-# vrati bgp peer labelu
-
-# proveri cilium
-
 - name: Check Redis Cluster State
   ansible.builtin.shell: |
     set -e
