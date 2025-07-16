@@ -23,6 +23,7 @@
     cmd: "{{ rke2_data_path }}/bin/kubectl label nodes {{ inventory_hostname }} {{ cilium_bgp_label | split('=') | first }}-"
   environment:
     KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  delegate_to: "{{ groups[rke2_servers_group_name].0 }}"
   when: inventory_hostname in groups[cilium_bgp_nodes]
 
 - name: Restart RKE2 service on {{ rke2_node_name }}
@@ -78,6 +79,7 @@
   ansible.builtin.command: "{{ cilium_cli_bin_path }} status --wait --wait-duration 15m"
   environment:
     KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  delegate_to: "{{ groups[rke2_servers_group_name].0 }}"
   changed_when: true
 
 - name: Add BGP label to node
@@ -85,6 +87,7 @@
     cmd: "{{ rke2_data_path }}/bin/kubectl label nodes {{ inventory_hostname }} {{ cilium_bgp_label }}"
   environment:
     KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+  delegate_to: "{{ groups[rke2_servers_group_name].0 }}"
   when: inventory_hostname in groups[cilium_bgp_nodes]
 
 - name: Check RabbitMQ Cluster State
