@@ -88,7 +88,7 @@
   run_once: true
   when: inventory_hostname in groups[rke2_agents_group_name]
 
-- name: Check Redis Cluster State
+- name: Check DragonflyDB State
   ansible.builtin.shell: |
     set -e
 
@@ -97,44 +97,57 @@
 
     for namespace in $namespaces; do
 
-      nodes=$({{ rke2_data_path }}/bin/kubectl get pods -n $namespace -l app.kubernetes.io/name=redis-cluster --no-headers -o Name | cut -d'/' -f2)
+        nodes=$({{ rke2_data_path }}/bin/kubectl get pods -n $namespace -l app.kubernetes.io/name=dragonfly --no-headers -o Name | cut -d'/' -f2)
 
-      if [ -z "$nodes" ]; then
-        echo "No Redis cluster found in namespace $namespace"
-        continue
-      fi
-
-      echo "Checking Redis cluster in namespace $namespace"
-
-      for node in $nodes; do
-
-        state=$({{ rke2_data_path }}/bin/kubectl exec $node -n $namespace -- redis-cli CLUSTER INFO | grep cluster_state | cut -d':' -f2 | tr -d '\r')
-        if [ $state != "ok" ]; then
-          echo "FAIL $node in namespace $namespace"
-          return_code=1
-        else
-          echo "OK $node in namespace $namespace"
+        if [ -z "$nodes" ]; then
+            echo "No Dragonfly nodes found in namespace $namespace"
+            continue
         fi
 
-        failed_nodes=$({{ rke2_data_path }}/bin/kubectl exec $node -n $namespace -- redis-cli CLUSTER NODES | grep -iE "fail|handshake|noaddr|disconnected" | wc -l)
-        if [ $failed_nodes -ne 0 ]; then
-          echo "FAIL - $failed_nodes FAILED nodes in namespace $namespace"
-          return_code=1
-        else
-          echo "OK - $failed_nodes FAILED nodes in namespace $namespace"
-        fi
+        echo "Checking Dragonfly in namespace $namespace"
 
-        sync_status=$({{ rke2_data_path }}/bin/kubectl exec $node -n $namespace -- redis-cli INFO REPLICATION | grep master_sync_in_progress | cut -d':' -f2 | tr -d '\r')
-        if [ -n "$sync_status" ]; then
-          if [ $sync_status -ne 0 ]; then
-            echo "FAIL - $node currently syncing from master"
-            return_code=1
-          else
-            echo "OK - $node syncronized"
-          fi
-        fi
+        for node in $nodes; do
+            
+            echo "($namespace) Pinging node $node"
+            ping_resp=$({{ rke2_data_path }}/bin/kubectl exec $node -n $namespace -c dragonfly -- redis-cli ping | tr -d '\r')
+            if [ "$?" -eq "124" ]; then
+                echo "($namespace) $node timed out"
+                return_code=1
+            fi
+            if [ "$ping_resp" != "PONG" ]; then
+                echo "($namespace) $ping_resp"
+                return_code=1
+            else
+                echo "($namespace) PONG from $node received"
+            fi
 
-      done
+            # Check connected slaves
+            slaves_connected=$({{ rke2_data_path }}/bin/kubectl exec $node -n $namespace -c dragonfly -- redis-cli INFO REPLICATION | grep connected_slaves | cut -d':' -f2 | tr -d '\r')
+            if [ -n "$slaves_connected" ]; then
+                if [ $slaves_connected -gt 0 ]; then
+                    echo "($namespace) Node $node is a master with $slaves_connected connected slaves"
+                else
+                    echo "($namespace) Node $node is a master with no connected slaves, needs at least one"
+                    return_code=1
+                fi
+            else
+                echo "($namespace) Node $node is a slave"
+            fi
+
+            # Slave replication status
+            sync_status=$({{ rke2_data_path }}/bin/kubectl exec $node -n $namespace -c dragonfly -- redis-cli INFO REPLICATION | grep master_sync_in_progress | cut -d':' -f2 | tr -d '\r')
+            if [ -n "$sync_status" ]; then
+                if [ $sync_status -ne 0 ]; then
+                    echo "($namespace) FAIL - $node currently syncing from master"
+                    return_code=1
+                else
+                    echo "($namespace) OK - $node syncronized"
+                fi
+            fi
+
+            echo
+
+        done
     done
 
     exit $return_code
