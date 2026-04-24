@@ -161,3 +161,58 @@
   delegate_to: "{{ active_server | default(groups[rke2_servers_group_name].0) }}"
   run_once: true
   when: inventory_hostname in groups[rke2_agents_group_name]
+
+- block:
+    - name: Ensure pip and venv is installed
+      ansible.builtin.apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+      loop:
+        - python3-pip
+        - python3-venv
+
+    - name: Ensure the virtual environment exists
+      ansible.builtin.pip:
+        name: "{{ venv_modules }}"
+        virtualenv: "{{ venv_dir }}"
+        virtualenv_command: "python3 -m venv"
+
+    - name: Wait for all containers to be ready
+      ansible.builtin.script: files/check_containers.py --kubeconfig /etc/rancher/rke2/rke2.yaml
+      args:
+        executable: "{{ venv_python }}"
+      register: all_containers_ready
+      failed_when: all_containers_ready.stdout.strip() != ""
+      changed_when: false
+      until: all_containers_ready.stdout.strip() == ""
+      retries: 120
+      delay: 15
+      when: 
+        - patch_k8s_wait_for_all_pods_to_be_ready is defined 
+        - patch_k8s_wait_for_all_pods_to_be_ready | bool
+
+    - name: Wait for all RabbitMQ queues to be replicated
+      ansible.builtin.script: files/check_rabbitmq_replication.py --kubectl_path {{ rke2_data_path }}/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml --namespace {{ k8s_patch_rabbitmq_namespace }}
+      args:
+        executable: "{{ venv_python }}"
+      register: all_rabbitmq_queues_replicated
+      failed_when: all_rabbitmq_queues_replicated.stdout.strip() != ""
+      changed_when: false
+      until: all_rabbitmq_queues_replicated.stdout.strip() == ""
+      retries: 120
+      delay: 15
+      when: inventory_hostname in groups[rke2_agents_group_name]
+  vars:
+    venv_modules:
+      - kubernetes==29.0.0
+      - psutil==6.0.0
+      - requests
+    venv_dir: /tmp/k8s_post_patch_venv
+    venv_python: "{{ venv_dir }}/bin/python3"
+  always:
+    - name: Ensure the virtual environment is deleted
+      ansible.builtin.file:
+        path: "{{ venv_dir }}"
+        state: absent
