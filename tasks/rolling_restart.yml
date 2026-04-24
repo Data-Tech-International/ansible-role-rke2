@@ -240,6 +240,7 @@
       - requests
     venv_dir: /tmp/k8s_post_patch_venv
     venv_python: "{{ venv_dir }}/bin/python3"
+  delegate_to: "{{ active_server | default(groups[rke2_servers_group_name].0) }}"
   always:
     - name: Ensure the virtual environment is deleted
       ansible.builtin.file:
